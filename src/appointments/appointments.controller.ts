@@ -14,21 +14,23 @@ import { AppointmentsService } from './appointments.service';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { UpdateAppointmentStatusDto } from './dto/update-appointment-status.dto';
+import { AvailableSlotsQueryDto } from './dto/available-slots-query.dto';
 
 @Controller('appointments')
 export class AppointmentsController {
   constructor(private readonly appointmentsService: AppointmentsService) {}
 
   /**
-   * Get available time slots
+   * Get available time slots for one or more services
+   * Example: GET /available-slots?employeeId=123&serviceIds=svc1,svc2,svc3&date=2024-01-15
    */
   @Get('available-slots')
-  getAvailableSlots(
-    @Query('employeeId') employeeId: string,
-    @Query('serviceId') serviceId: string,
-    @Query('date') date: string,
-  ) {
-    return this.appointmentsService.getAvailableTimeSlots(employeeId, serviceId, date);
+  getAvailableSlots(@Query() query: AvailableSlotsQueryDto) {
+    return this.appointmentsService.getAvailableTimeSlots(
+      query.employeeId,
+      query.serviceIds,
+      query.date,
+    );
   }
 
   /**

@@ -5,10 +5,12 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { Appointment, NewAppointment } from '../database/schemas/appointment.schema';
+import { NewAppointmentService } from '../database/schemas/appointment-service.schema';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { UpdateAppointmentStatusDto } from './dto/update-appointment-status.dto';
 import { AppointmentsRepository } from './appointments.repository';
+import { AppointmentServicesRepository } from './appointment-services.repository';
 import { SalonsRepository } from '../salons/salons.repository';
 import { EmployeesRepository } from '../employees/employees.repository';
 import { EmployeeSchedulesRepository } from '../employees/employee-schedules.repository';
@@ -27,6 +29,7 @@ import {
 export class AppointmentsService {
   constructor(
     private readonly appointmentsRepository: AppointmentsRepository,
+    private readonly appointmentServicesRepository: AppointmentServicesRepository,
     private readonly salonsRepository: SalonsRepository,
     private readonly employeesRepository: EmployeesRepository,
     private readonly schedulesRepository: EmployeeSchedulesRepository,
@@ -35,11 +38,15 @@ export class AppointmentsService {
   ) {}
 
   /**
-   * Get available time slots for an employee and service on a specific date
+   * Get available time slots for an employee and one or more services on a specific date
+   * @param employeeId - ID of the employee
+   * @param serviceIds - Array of service IDs (can be one or multiple)
+   * @param date - Date in format YYYY-MM-DD
+   * @returns Array of available time slots in HH:MM format
    */
   async getAvailableTimeSlots(
     employeeId: string,
-    serviceId: string,
+    serviceIds: string[],
     date: string,
   ): Promise<string[]> {
     // 1. Validate employee exists
@@ -48,19 +55,40 @@ export class AppointmentsService {
       throw new NotFoundException(`Employee with ID ${employeeId} not found`);
     }
 
-    // 2. Validate service exists
-    const service = await this.servicesRepository.findById(serviceId);
-    if (!service) {
-      throw new NotFoundException(`Service with ID ${serviceId} not found`);
+    // 2. Validate all services exist and calculate total duration
+    let totalDuration = 0;
+    const services: any[] = [];
+
+    for (const serviceId of serviceIds) {
+      const service = await this.servicesRepository.findById(serviceId);
+      if (!service) {
+        throw new NotFoundException(`Service with ID ${serviceId} not found`);
+      }
+
+      // Validate service belongs to the same salon
+      if (service.salonId !== employee.salonId) {
+        throw new BadRequestException(
+          `Service ${serviceId} does not belong to employee's salon`,
+        );
+      }
+
+      // Validate employee can perform this service
+      const canPerform = await this.employeeServicesRepository.exists(employeeId, serviceId);
+      if (!canPerform) {
+        throw new BadRequestException(
+          `Employee cannot perform service: ${service.name}`,
+        );
+      }
+
+      services.push(service);
+      totalDuration += service.duration;
     }
 
-    // 3. Validate employee can perform this service
-    const canPerform = await this.employeeServicesRepository.exists(employeeId, serviceId);
-    if (!canPerform) {
-      throw new BadRequestException('Employee cannot perform this service');
+    if (totalDuration === 0) {
+      throw new BadRequestException('Total service duration cannot be 0');
     }
 
-    // 4. Get salon configuration
+    // 3. Get salon configuration
     const salon = await this.salonsRepository.findById(employee.salonId);
     if (!salon) {
       throw new NotFoundException(`Salon with ID ${employee.salonId} not found`);
@@ -68,7 +96,7 @@ export class AppointmentsService {
 
     const slotInterval = salon.defaultSlotInterval || 10;
 
-    // 5. Get employee schedule for this day
+    // 4. Get employee schedule for this day
     const dateObj = new Date(date);
     const dayOfWeek = dateObj.getDay();
 
@@ -78,30 +106,30 @@ export class AppointmentsService {
       return []; // Employee doesn't work this day
     }
 
-    // 6. Generate all possible time slots
+    // 5. Generate all possible time slots
     const allSlots = generateTimeSlots(schedule.startTime, schedule.endTime, slotInterval);
 
-    // 7. Get existing appointments for this employee on this date
+    // 6. Get existing appointments for this employee on this date
     const activeAppointments = await this.appointmentsRepository.findByEmployeeAndDateWithStatus(
       employeeId,
       date,
       ['pending', 'confirmed', 'in_progress'],
     );
 
-    // 8. Calculate occupied slots
+    // 7. Calculate occupied slots
     const occupiedSlots = getOccupiedSlots(activeAppointments, slotInterval);
 
-    // 9. Filter available slots (considering service duration)
+    // 8. Filter available slots (considering total duration of all services)
     const availableSlots = getAvailableSlots(
       allSlots,
       occupiedSlots,
-      service.duration,
+      totalDuration,
       slotInterval,
     );
 
-    // 10. Filter slots that don't extend beyond schedule end time
+    // 9. Filter slots that don't extend beyond schedule end time
     const validSlots = availableSlots.filter((slot) =>
-      canAccommodateService(slot, service.duration, schedule.endTime),
+      canAccommodateService(slot, totalDuration, schedule.endTime),
     );
 
     return validSlots;
@@ -119,7 +147,7 @@ export class AppointmentsService {
     try {
       const availableSlots = await this.getAvailableTimeSlots(
         employeeId,
-        serviceId,
+        [serviceId], // Convert single service to array
         appointmentDate,
       );
 
@@ -138,10 +166,10 @@ export class AppointmentsService {
   }
 
   /**
-   * Create a new appointment with full validation
+   * Create a new appointment with one or more services
    */
   async create(createAppointmentDto: CreateAppointmentDto): Promise<Appointment> {
-    const { employeeId, serviceId, salonId, appointmentDate, startTime } = createAppointmentDto;
+    const { employeeId, serviceIds, salonId, appointmentDate, startTime } = createAppointmentDto;
 
     // 1. Validate salon exists
     const salon = await this.salonsRepository.findById(salonId);
@@ -159,60 +187,90 @@ export class AppointmentsService {
       throw new BadRequestException('Employee does not belong to this salon');
     }
 
-    // 3. Validate service exists and belongs to salon
-    const service = await this.servicesRepository.findById(serviceId);
-    if (!service) {
-      throw new NotFoundException(`Service with ID ${serviceId} not found`);
+    // 3. Validate all services exist, calculate totals
+    let totalDuration = 0;
+    let totalPrice = 0;
+    const services: any[] = [];
+
+    for (const serviceId of serviceIds) {
+      const service = await this.servicesRepository.findById(serviceId);
+      if (!service) {
+        throw new NotFoundException(`Service with ID ${serviceId} not found`);
+      }
+
+      if (service.salonId !== salonId) {
+        throw new BadRequestException(
+          `Service ${serviceId} does not belong to this salon`,
+        );
+      }
+
+      // Validate employee can perform service
+      const canPerform = await this.employeeServicesRepository.exists(employeeId, serviceId);
+      if (!canPerform) {
+        throw new BadRequestException(
+          `Employee cannot perform service: ${service.name}`,
+        );
+      }
+
+      services.push(service);
+      totalDuration += service.duration;
+      totalPrice += parseFloat(service.price);
     }
 
-    if (service.salonId !== salonId) {
-      throw new BadRequestException('Service does not belong to this salon');
+    if (totalDuration === 0) {
+      throw new BadRequestException('Total service duration cannot be 0');
     }
 
-    // 4. Validate employee can perform service
-    const canPerform = await this.employeeServicesRepository.exists(employeeId, serviceId);
-    if (!canPerform) {
-      throw new BadRequestException('Employee cannot perform this service');
-    }
-
-    // 5. Validate appointment date/time
+    // 4. Validate appointment date/time
     await this.validateAppointmentDateTime(
       salon,
       employee.id,
       appointmentDate,
       startTime,
-      service.duration,
+      totalDuration,
     );
 
-    // 6. Calculate end time
-    const endTime = calculateEndTime(startTime, service.duration);
+    // 5. Calculate end time
+    const endTime = calculateEndTime(startTime, totalDuration);
 
-    // 7. Check for conflicts
+    // 6. Check for conflicts
     const conflicts = await this.checkConflicts(employeeId, appointmentDate, startTime, endTime);
 
     if (conflicts.length > 0) {
       throw new ConflictException('Time slot conflicts with existing appointment');
     }
 
-    // 8. Create appointment
+    // 7. Create appointment
     const newAppointment: NewAppointment = {
       salonId,
       employeeId,
-      serviceId,
       appointmentDate,
       startTime,
       endTime,
-      duration: service.duration,
+      totalDuration,
+      totalPrice: totalPrice.toFixed(2),
       status: salon.requireBookingApproval ? 'pending' : 'confirmed',
       clientName: createAppointmentDto.clientName,
       clientEmail: createAppointmentDto.clientEmail,
       clientPhone: createAppointmentDto.clientPhone,
-      price: service.price,
       notes: createAppointmentDto.notes,
       reminderSent: false,
     };
 
-    return await this.appointmentsRepository.create(newAppointment);
+    const appointment = await this.appointmentsRepository.create(newAppointment);
+
+    // 8. Create appointment-service relationships
+    const appointmentServiceData: NewAppointmentService[] = services.map((service, index) => ({
+      appointmentId: appointment.id,
+      serviceId: service.id,
+      duration: service.duration,
+      price: service.price,
+      orderIndex: index,
+    }));
+
+    await this.appointmentServicesRepository.createMany(appointmentServiceData);
+
+    return appointment;
   }
 
   /**
@@ -380,6 +438,7 @@ export class AppointmentsService {
 
   /**
    * Update appointment
+   * Note: Updating services is not supported. Cancel and create a new appointment instead.
    */
   async update(id: string, updateAppointmentDto: UpdateAppointmentDto): Promise<Appointment> {
     const appointment = await this.findOne(id);
@@ -387,20 +446,13 @@ export class AppointmentsService {
     // If changing time, validate new time
     if (
       updateAppointmentDto.appointmentDate ||
-      updateAppointmentDto.startTime ||
-      updateAppointmentDto.serviceId
+      updateAppointmentDto.startTime
     ) {
       const newDate = updateAppointmentDto.appointmentDate || appointment.appointmentDate;
       const newStartTime = updateAppointmentDto.startTime || appointment.startTime;
 
-      let serviceDuration = appointment.duration;
-      if (updateAppointmentDto.serviceId) {
-        const service = await this.servicesRepository.findById(updateAppointmentDto.serviceId);
-        if (!service) {
-          throw new NotFoundException('Service not found');
-        }
-        serviceDuration = service.duration;
-      }
+      // Use existing total duration
+      const serviceDuration = appointment.totalDuration;
 
       const salon = await this.salonsRepository.findById(appointment.salonId);
       await this.validateAppointmentDateTime(

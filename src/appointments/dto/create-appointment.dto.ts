@@ -4,6 +4,8 @@ import {
   IsDateString,
   IsEmail,
   IsOptional,
+  IsArray,
+  ArrayMinSize,
   MaxLength,
   MinLength,
   Matches,
@@ -16,8 +18,10 @@ export class CreateAppointmentDto {
   @IsUUID()
   employeeId: string;
 
-  @IsUUID()
-  serviceId: string;
+  @IsArray()
+  @ArrayMinSize(1, { message: 'At least one service is required' })
+  @IsUUID('4', { each: true })
+  serviceIds: string[];
 
   @IsDateString()
   appointmentDate: string; // YYYY-MM-DD
