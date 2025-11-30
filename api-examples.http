@@ -1,0 +1,113 @@
+# SalonOne API - HTTP Client Examples
+
+# You can use this file with REST Client VSCode extension or similar tools
+
+@baseUrl = http://localhost:3000
+@contentType = application/json
+
+###############################################
+# SALONS ENDPOINTS
+###############################################
+
+### Create a new salon
+POST {{baseUrl}}/salons
+Content-Type: {{contentType}}
+
+{
+  "name": "Barbearia Elite",
+  "slug": "barbearia-elite",
+  "description": "Premium barbershop services",
+  "email": "contato@elite.com",
+  "phone": "+5511988887777",
+  "address": "Av. Brigadeiro Faria Lima, 1000",
+  "city": "São Paulo",
+  "state": "SP",
+  "zipCode": "01451-000",
+  "country": "Brazil",
+  "website": "https://elite.com",
+  "logo": "https://example.com/logo.png",
+  "coverImage": "https://example.com/cover.jpg",
+  "operatingHours": {
+    "monday": { "open": "09:00", "close": "18:00", "closed": false },
+    "tuesday": { "open": "09:00", "close": "18:00", "closed": false },
+    "wednesday": { "open": "09:00", "close": "18:00", "closed": false },
+    "thursday": { "open": "09:00", "close": "18:00", "closed": false },
+    "friday": { "open": "09:00", "close": "20:00", "closed": false },
+    "saturday": { "open": "09:00", "close": "17:00", "closed": false },
+    "sunday": { "closed": true }
+  },
+  "timezone": "America/Sao_Paulo",
+  "currency": "BRL",
+  "allowOnlineBooking": true,
+  "requireBookingApproval": false,
+  "plan": "premium",
+  "isActive": true
+}
+
+### Get all salons
+GET {{baseUrl}}/salons
+
+### Get salon by ID (replace with actual UUID)
+GET {{baseUrl}}/salons/YOUR_SALON_ID_HERE
+
+### Get salon by slug
+GET {{baseUrl}}/salons/slug/barbearia-moderna
+
+### Update salon (replace with actual UUID)
+PATCH {{baseUrl}}/salons/YOUR_SALON_ID_HERE
+Content-Type: {{contentType}}
+
+{
+  "name": "Barbearia Moderna Premium",
+  "description": "Updated description",
+  "phone": "+5511999998888"
+}
+
+### Toggle salon active status (replace with actual UUID)
+PATCH {{baseUrl}}/salons/YOUR_SALON_ID_HERE/toggle-active
+
+### Delete salon (replace with actual UUID)
+DELETE {{baseUrl}}/salons/YOUR_SALON_ID_HERE
+
+###############################################
+# VALIDATION EXAMPLES (should return errors)
+###############################################
+
+### Invalid email
+POST {{baseUrl}}/salons
+Content-Type: {{contentType}}
+
+{
+  "name": "Test Salon",
+  "slug": "test-salon",
+  "email": "invalid-email",
+  "phone": "+5511999999999",
+  "address": "Test Address",
+  "city": "São Paulo",
+  "state": "SP",
+  "zipCode": "01234-567"
+}
+
+### Missing required fields
+POST {{baseUrl}}/salons
+Content-Type: {{contentType}}
+
+{
+  "name": "Test Salon"
+}
+
+### Duplicate slug (run create twice)
+POST {{baseUrl}}/salons
+Content-Type: {{contentType}}
+
+{
+  "name": "Duplicate Test",
+  "slug": "barbearia-moderna",
+  "email": "test@test.com",
+  "phone": "+5511999999999",
+  "address": "Test Address",
+  "city": "São Paulo",
+  "state": "SP",
+  "zipCode": "01234-567"
+}
+
