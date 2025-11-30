@@ -1,18 +1,66 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { Salon, NewSalon } from '../database/schemas/salon.schema';
+import { NewSalonOperatingHours } from '../database/schemas/salon-operating-hours.schema';
 import { CreateSalonDto } from './dto/create-salon.dto';
 import { UpdateSalonDto } from './dto/update-salon.dto';
 import { SalonsRepository } from './salons.repository';
+import { SalonOperatingHoursRepository } from './salon-operating-hours.repository';
+import { validateScheduleTimes } from '../common/validators/schedule.validator';
 
 @Injectable()
 export class SalonsService {
-  constructor(private readonly salonsRepository: SalonsRepository) {}
+  constructor(
+    private readonly salonsRepository: SalonsRepository,
+    private readonly operatingHoursRepository: SalonOperatingHoursRepository,
+  ) {}
 
   async create(createSalonDto: CreateSalonDto): Promise<Salon> {
+    // Validate operating hours is provided
+    if (!createSalonDto.operatingHours || createSalonDto.operatingHours.length === 0) {
+      throw new BadRequestException('Operating hours are required when creating a salon');
+    }
+
+    // Validate each operating hours entry
+    for (const hours of createSalonDto.operatingHours) {
+      // Skip validation if day is marked as closed
+      if (hours.closed) {
+        continue;
+      }
+
+      // Validate time ranges
+      const timeValidation = validateScheduleTimes({
+        id: undefined,
+        dayOfWeek: hours.dayOfWeek,
+        startTime: hours.startTime,
+        endTime: hours.endTime,
+      });
+      if (!timeValidation.valid) {
+        throw new BadRequestException(`Operating hours validation failed for day ${hours.dayOfWeek}: ${timeValidation.error}`);
+      }
+    }
+
+    // Check for duplicate days in operating hours
+    const days = createSalonDto.operatingHours.map(h => h.dayOfWeek);
+    const uniqueDays = new Set(days);
+    if (days.length !== uniqueDays.size) {
+      throw new BadRequestException('Operating hours contain duplicate days');
+    }
+
     try {
       const newSalon: NewSalon = {
-        ...createSalonDto,
+        name: createSalonDto.name,
+        slug: createSalonDto.slug,
+        description: createSalonDto.description,
+        email: createSalonDto.email,
+        phone: createSalonDto.phone,
+        address: createSalonDto.address,
+        city: createSalonDto.city,
+        state: createSalonDto.state,
+        zipCode: createSalonDto.zipCode,
         country: createSalonDto.country || 'Brazil',
+        logo: createSalonDto.logo,
+        coverImage: createSalonDto.coverImage,
+        website: createSalonDto.website,
         timezone: createSalonDto.timezone || 'America/Sao_Paulo',
         currency: createSalonDto.currency || 'BRL',
         allowOnlineBooking: createSalonDto.allowOnlineBooking ?? true,
@@ -20,7 +68,28 @@ export class SalonsService {
         isActive: createSalonDto.isActive ?? true,
       };
 
-      return await this.salonsRepository.create(newSalon);
+      const salon = await this.salonsRepository.create(newSalon);
+
+      // Create all operating hours for the salon
+      try {
+        for (const hours of createSalonDto.operatingHours) {
+          const newHours: NewSalonOperatingHours = {
+            salonId: salon.id,
+            dayOfWeek: hours.dayOfWeek,
+            startTime: hours.startTime,
+            endTime: hours.endTime,
+            closed: hours.closed ?? false,
+          };
+
+          await this.operatingHoursRepository.create(newHours);
+        }
+      } catch (error) {
+        // If operating hours creation fails, delete the salon to maintain data integrity
+        await this.salonsRepository.delete(salon.id);
+        throw new BadRequestException('Failed to create salon operating hours. Salon creation rolled back.');
+      }
+
+      return salon;
     } catch (error: any) {
       if (error.code === '23505') {
         // Unique constraint violation

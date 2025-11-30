@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, boolean, timestamp, jsonb, time, decimal, integer } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, boolean, timestamp, integer } from 'drizzle-orm/pg-core';
 
 export const salons = pgTable('salons', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -20,15 +20,16 @@ export const salons = pgTable('salons', {
   coverImage: varchar('cover_image', { length: 500 }),
   website: varchar('website', { length: 255 }),
   
-  // Operating hours - stored as JSON
-  // Example: { "monday": { "open": "09:00", "close": "18:00", "closed": false }, ... }
-  operatingHours: jsonb('operating_hours'),
-  
   // Settings
   timezone: varchar('timezone', { length: 100 }).notNull().default('America/Sao_Paulo'),
   currency: varchar('currency', { length: 3 }).notNull().default('BRL'),
   allowOnlineBooking: boolean('allow_online_booking').notNull().default(true),
   requireBookingApproval: boolean('require_booking_approval').notNull().default(false),
+  
+  // Slot configuration
+  defaultSlotInterval: integer('default_slot_interval').notNull().default(10), // minutes
+  maxAdvanceBookingDays: integer('max_advance_booking_days').notNull().default(90),
+  minAdvanceBookingHours: integer('min_advance_booking_hours').notNull().default(2),
   
   isActive: boolean('is_active').notNull().default(true),
   

@@ -1,7 +1,7 @@
 import { Module, Global } from '@nestjs/common';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import * as schema from './schemas/salon.schema';
+import * as schema from './schemas';
 
 export const DATABASE_CONNECTION = 'DATABASE_CONNECTION';
 

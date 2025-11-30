@@ -3,12 +3,16 @@ import {
   IsEmail,
   IsOptional,
   IsBoolean,
-  IsObject,
   MaxLength,
   MinLength,
   IsUrl,
   IsIn,
+  IsArray,
+  ValidateNested,
+  ArrayMinSize,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+import { CreateOperatingHoursDto } from './create-operating-hours.dto';
 
 export class CreateSalonDto {
   @IsString()
@@ -69,18 +73,12 @@ export class CreateSalonDto {
   @IsUrl()
   website?: string;
 
-  // Operating hours
-  @IsOptional()
-  @IsObject()
-  operatingHours?: {
-    monday?: { open: string; close: string; closed: boolean };
-    tuesday?: { open: string; close: string; closed: boolean };
-    wednesday?: { open: string; close: string; closed: boolean };
-    thursday?: { open: string; close: string; closed: boolean };
-    friday?: { open: string; close: string; closed: boolean };
-    saturday?: { open: string; close: string; closed: boolean };
-    sunday?: { open: string; close: string; closed: boolean };
-  };
+  // Operating hours - REQUIRED when creating salon
+  @IsArray()
+  @ArrayMinSize(1, { message: 'At least one operating hour is required' })
+  @ValidateNested({ each: true })
+  @Type(() => CreateOperatingHoursDto)
+  operatingHours: CreateOperatingHoursDto[];
 
   // Settings
   @IsOptional()
