@@ -6,12 +6,15 @@ import { UpdateSalonDto } from './dto/update-salon.dto';
 import { SalonsRepository } from './salons.repository';
 import { SalonOperatingHoursRepository } from './salon-operating-hours.repository';
 import { validateScheduleTimes } from '../common/validators/schedule.validator';
+import { Service } from 'src/database/schemas/service.schema';
+import { ServicesRepository } from 'src/services/services.repository';
 
 @Injectable()
 export class SalonsService {
   constructor(
     private readonly salonsRepository: SalonsRepository,
     private readonly operatingHoursRepository: SalonOperatingHoursRepository,
+    private readonly servicesRepository: ServicesRepository,
   ) {}
 
   async create(createSalonDto: CreateSalonDto): Promise<Salon> {
@@ -121,6 +124,12 @@ export class SalonsService {
     }
     
     return salon;
+  }
+
+  async findSalonDataAndServices(slug: string): Promise<Salon & { services: Service[] }> {
+    const salon = await this.findBySlug(slug);
+    const services = await this.servicesRepository.findBySalonId(salon.id);
+    return { ...salon, services };
   }
 
   async update(id: string, updateSalonDto: UpdateSalonDto): Promise<Salon> {

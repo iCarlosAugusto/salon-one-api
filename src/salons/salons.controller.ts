@@ -28,14 +28,9 @@ export class SalonsController {
     return this.salonsService.findAll();
   }
 
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.salonsService.findOne(id);
-  }
-
-  @Get('slug/:slug')
+  @Get(':slug')
   findBySlug(@Param('slug') slug: string) {
-    return this.salonsService.findBySlug(slug);
+    return this.salonsService.findSalonDataAndServices(slug);
   }
 
   @Patch(':id')
