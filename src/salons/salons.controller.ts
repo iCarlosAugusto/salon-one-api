@@ -26,12 +26,28 @@ export class SalonsController {
   @Get()
   findAll() {
     return this.salonsService.findAll();
+  } 
+
+  @Get(':id')
+  findById(@Param('id') id: string) {
+    return this.salonsService.findById(id);
   }
 
-  @Get(':slug')
+  @Get(':slug/slug')
   findBySlug(@Param('slug') slug: string) {
     return this.salonsService.findSalonDataAndServices(slug);
   }
+
+  @Get(':slug/services')
+  findServicesBySlug(@Param('slug') slug: string) {
+    return this.salonsService.findServicesBySlug(slug);
+  }
+
+  @Get(':slug/employees')
+  findEmployeesBySlug(@Param('slug') slug: string) {
+    return this.salonsService.findEmployeesBySlug(slug);
+  }
+
 
   @Patch(':id')
   update(@Param('id') id: string, @Body() updateSalonDto: UpdateSalonDto) {

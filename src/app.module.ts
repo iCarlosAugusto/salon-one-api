@@ -6,6 +6,6 @@ import { EmployeesModule } from './employees/employees.module';
 import { AppointmentsModule } from './appointments/appointments.module';
 
 @Module({
-  imports: [DatabaseModule, SalonsModule, ServicesModule, EmployeesModule, AppointmentsModule],
+  imports: [DatabaseModule, SalonsModule, ServicesModule, EmployeesModule, AppointmentsModule]
 })
 export class AppModule {}

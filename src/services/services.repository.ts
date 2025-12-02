@@ -1,8 +1,9 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, NotFoundException } from '@nestjs/common';
 import { eq, and } from 'drizzle-orm';
 import { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { DATABASE_CONNECTION } from '../database/database.module';
 import { services, Service, NewService } from '../database/schemas/service.schema';
+import { Employee, employees, employeeServices, salons } from 'src/database/schemas';
 
 @Injectable()
 export class ServicesRepository {
@@ -22,6 +23,23 @@ export class ServicesRepository {
 
   async findBySalonId(salonId: string): Promise<Service[]> {
     return await this.db.select().from(services).where(eq(services.salonId, salonId));
+  }
+
+
+  async findByEmployeeId(employeeId: string): Promise<Service[]> { 
+    return await this.db.select({
+      id: services.id,
+      name: services.name,
+      description: services.description,
+      isActive: services.isActive,
+      createdAt: services.createdAt,
+      updatedAt: services.updatedAt,
+      salonId: services.salonId,
+      price: services.price,
+      duration: services.duration,
+      category: services.category,
+      imageUrl: services.imageUrl,
+    }).from(services).innerJoin(employeeServices, eq(services.id, employeeServices.serviceId)).where(eq(employeeServices.employeeId, employeeId));
   }
 
   async findById(id: string): Promise<Service | undefined> {
@@ -56,6 +74,22 @@ export class ServicesRepository {
       .select()
       .from(services)
       .where(and(eq(services.salonId, salonId), eq(services.isActive, true)));
+  }
+
+  async findServicesBySalonSlug(slug: string): Promise<Service[]> {
+    const [salon] = await this.db.select().from(salons).where(eq(salons.slug, slug));
+    if (!salon) {
+      throw new NotFoundException(`Salon with slug ${slug} not found`);
+    }
+    return await this.db.select().from(services).where(eq(services.salonId, salon.id));
+  }
+
+  async findEmployeesByServiceId(id: string): Promise<Employee[]> {
+    const result = await this.db.select()
+      .from(employees)
+      .innerJoin(employeeServices, eq(employees.id, employeeServices.employeeId))
+      .where(eq(employeeServices.serviceId, id));
+    return result.map((row) => row.employees);
   }
 }
 

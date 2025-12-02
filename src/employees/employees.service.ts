@@ -461,8 +461,7 @@ export class EmployeesService {
   async findEmployeeServices(employeeId: string) {
     // Validate employee exists
     await this.findOne(employeeId);
-
-    return await this.employeeServicesRepository.findByEmployeeId(employeeId);
+    return await this.servicesRepository.findByEmployeeId(employeeId);
   }
 
   async removeServiceFromEmployee(employeeId: string, serviceId: string): Promise<void> {

@@ -1,3 +1,4 @@
+
 import {
   Controller,
   Get,
@@ -40,6 +41,11 @@ export class ServicesController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.servicesService.findOne(id);
+  }
+
+  @Get(':id/employees')
+  findEmployeesByServiceId(@Param('id') id: string) {
+    return this.servicesService.findEmployeesByServiceId(id);
   }
 
   @Patch(':id')

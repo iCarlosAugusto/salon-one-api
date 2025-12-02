@@ -5,6 +5,7 @@ import { UpdateServiceDto } from './dto/update-service.dto';
 import { ServicesRepository } from './services.repository';
 import { SalonsRepository } from '../salons/salons.repository';
 import { validateServiceDuration, validateServicePrice } from '../common/validators/schedule.validator';
+import { Employee } from '../database/schemas/employee.schema';
 
 @Injectable()
 export class ServicesService {
@@ -125,6 +126,10 @@ export class ServicesService {
     }
 
     return await this.servicesRepository.findActiveServices(salonId);
+  }
+
+  findEmployeesByServiceId(id: string): Promise<Employee[]> {
+    return this.servicesRepository.findEmployeesByServiceId(id);
   }
 }
 

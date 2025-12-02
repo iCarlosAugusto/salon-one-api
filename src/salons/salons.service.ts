@@ -8,6 +8,8 @@ import { SalonOperatingHoursRepository } from './salon-operating-hours.repositor
 import { validateScheduleTimes } from '../common/validators/schedule.validator';
 import { Service } from 'src/database/schemas/service.schema';
 import { ServicesRepository } from 'src/services/services.repository';
+import { Employee } from 'src/database/schemas/employee.schema';
+import { EmployeesRepository } from 'src/employees/employees.repository';
 
 @Injectable()
 export class SalonsService {
@@ -15,6 +17,7 @@ export class SalonsService {
     private readonly salonsRepository: SalonsRepository,
     private readonly operatingHoursRepository: SalonOperatingHoursRepository,
     private readonly servicesRepository: ServicesRepository,
+    private readonly employeesRepository: EmployeesRepository,
   ) {}
 
   async create(createSalonDto: CreateSalonDto): Promise<Salon> {
@@ -159,6 +162,23 @@ export class SalonsService {
     return await this.salonsRepository.update(id, {
       isActive: !salon.isActive,
     });
+  }
+
+  async findById(id: string): Promise<Salon> {
+    const salon = await this.salonsRepository.findById(id);
+    if (!salon) {
+      throw new NotFoundException(`Salon with ID ${id} not found`);
+    }
+    return salon;
+  }
+
+  async findServicesBySlug(slug: string): Promise<Service[]> {
+    return await this.servicesRepository.findServicesBySalonSlug(slug);
+  }
+
+  async findEmployeesBySlug(slug: string): Promise<Employee[]> {
+    const salon = await this.findBySlug(slug);
+    return await this.employeesRepository.findBySalonId(salon.id);
   }
 }
 
