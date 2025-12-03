@@ -1,8 +1,9 @@
 import { Injectable, Inject } from '@nestjs/common';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { DATABASE_CONNECTION } from '../database/database.module';
 import { appointmentServices, AppointmentService, NewAppointmentService } from '../database/schemas/appointment-service.schema';
+import { appointments } from '../database/schemas/appointment.schema';
 
 @Injectable()
 export class AppointmentServicesRepository {
@@ -30,6 +31,48 @@ export class AppointmentServicesRepository {
       .from(appointmentServices)
       .where(eq(appointmentServices.appointmentId, appointmentId))
       .orderBy(appointmentServices.orderIndex);
+  }
+
+  async findByEmployeeAndDate(
+    employeeId: string,
+    date: string,
+  ): Promise<any[]> {
+    const results = await this.db
+      .select({
+        appointmentService: appointmentServices,
+        appointment: appointments,
+      })
+      .from(appointmentServices)
+      .innerJoin(appointments, eq(appointmentServices.appointmentId, appointments.id))
+      .where(
+        and(
+          eq(appointmentServices.employeeId, employeeId),
+          eq(appointments.appointmentDate, date),
+        ),
+      );
+    
+    return results.map(r => r.appointmentService);
+  }
+
+  async findByEmployeeAndDateWithStatus(
+    employeeId: string,
+    date: string,
+    statuses: string[],
+  ): Promise<any[]> {
+    return await this.db
+      .select({
+        appointmentService: appointmentServices,
+        appointment: appointments,
+      })
+      .from(appointmentServices)
+      .innerJoin(appointments, eq(appointmentServices.appointmentId, appointments.id))
+      .where(
+        and(
+          eq(appointmentServices.employeeId, employeeId),
+          eq(appointments.appointmentDate, date),
+          inArray(appointments.status, statuses),
+        ),
+      );
   }
 
   async findByAppointmentAndService(

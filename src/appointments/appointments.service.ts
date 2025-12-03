@@ -210,9 +210,10 @@ export class AppointmentsService {
 
   /**
    * Create a new appointment with one or more services
+   * Each service can have a specific employee or be auto-assigned
    */
   async create(createAppointmentDto: CreateAppointmentDto): Promise<Appointment> {
-    const { employeeId, serviceIds, salonId, appointmentDate, startTime } = createAppointmentDto;
+    const { services: serviceBookings, salonId, appointmentDate, startTime } = createAppointmentDto;
 
     // 1. Validate salon exists
     const salon = await this.salonsRepository.findById(salonId);
@@ -220,42 +221,24 @@ export class AppointmentsService {
       throw new NotFoundException(`Salon with ID ${salonId} not found`);
     }
 
-    // 2. Validate employee exists and belongs to salon
-    const employee = await this.employeesRepository.findById(employeeId);
-    if (!employee) {
-      throw new NotFoundException(`Employee with ID ${employeeId} not found`);
-    }
-
-    if (employee.salonId !== salonId) {
-      throw new BadRequestException('Employee does not belong to this salon');
-    }
-
-    // 3. Validate all services exist, calculate totals
+    // 2. Validate and load all services
+    const servicesData: any[] = [];
     let totalDuration = 0;
     let totalPrice = 0;
-    const services: any[] = [];
 
-    for (const serviceId of serviceIds) {
-      const service = await this.servicesRepository.findById(serviceId);
+    for (const booking of serviceBookings) {
+      const service = await this.servicesRepository.findById(booking.serviceId);
       if (!service) {
-        throw new NotFoundException(`Service with ID ${serviceId} not found`);
+        throw new NotFoundException(`Service with ID ${booking.serviceId} not found`);
       }
 
       if (service.salonId !== salonId) {
         throw new BadRequestException(
-          `Service ${serviceId} does not belong to this salon`,
+          `Service ${booking.serviceId} does not belong to this salon`,
         );
       }
 
-      // Validate employee can perform service
-      const canPerform = await this.employeeServicesRepository.exists(employeeId, serviceId);
-      if (!canPerform) {
-        throw new BadRequestException(
-          `Employee cannot perform service: ${service.name}`,
-        );
-      }
-
-      services.push(service);
+      servicesData.push(service);
       totalDuration += service.duration;
       totalPrice += parseFloat(service.price);
     }
@@ -264,32 +247,106 @@ export class AppointmentsService {
       throw new BadRequestException('Total service duration cannot be 0');
     }
 
-    // 4. Validate appointment date/time
-    await this.validateAppointmentDateTime(
-      salon,
-      employee.id,
-      appointmentDate,
-      startTime,
-      totalDuration,
-    );
+    // 3. Process each service: validate or auto-assign employee
+    const serviceAssignments: Array<{
+      service: any;
+      employeeId: string;
+      startTime: string;
+      endTime: string;
+      orderIndex: number;
+    }> = [];
 
-    // 5. Calculate end time
-    const endTime = calculateEndTime(startTime, totalDuration);
+    let currentTime = startTime;
+    const dateObj = new Date(appointmentDate);
+    const dayOfWeek = dateObj.getDay();
 
-    // 6. Check for conflicts
-    const conflicts = await this.checkConflicts(employeeId, appointmentDate, startTime, endTime);
+    for (let i = 0; i < serviceBookings.length; i++) {
+      const booking = serviceBookings[i];
+      const service = servicesData[i];
+      let assignedEmployeeId: string;
 
-    if (conflicts.length > 0) {
-      throw new ConflictException('Time slot conflicts with existing appointment');
+      // Calculate end time for this service
+      const serviceEndTime = calculateEndTime(currentTime, service.duration);
+
+      if (booking.employeeId) {
+        // Employee specified: validate availability
+        const employee = await this.employeesRepository.findById(booking.employeeId);
+        if (!employee) {
+          throw new NotFoundException(`Employee with ID ${booking.employeeId} not found`);
+        }
+
+        if (employee.salonId !== salonId) {
+          throw new BadRequestException('Employee does not belong to this salon');
+        }
+
+        // Validate employee can perform service
+        const canPerform = await this.employeeServicesRepository.exists(
+          booking.employeeId,
+          booking.serviceId,
+        );
+        if (!canPerform) {
+          throw new BadRequestException(
+            `Employee ${employee.firstName} ${employee.lastName} cannot perform service: ${service.name}`,
+          );
+        }
+
+        // Validate employee availability for this time slot
+        const isAvailable = await this.validateEmployeeAvailability(
+          booking.employeeId,
+          appointmentDate,
+          currentTime,
+          serviceEndTime,
+          dayOfWeek,
+        );
+
+        if (!isAvailable) {
+          throw new ConflictException(
+            `Employee ${employee.firstName} ${employee.lastName} is not available for service ${service.name} at ${currentTime}`,
+          );
+        }
+
+        assignedEmployeeId = booking.employeeId;
+      } else {
+        // No employee specified: auto-assign
+        const foundEmployee = await this.findAvailableEmployee(
+          salonId,
+          booking.serviceId,
+          appointmentDate,
+          currentTime,
+          serviceEndTime,
+          dayOfWeek,
+        );
+
+        if (!foundEmployee) {
+          throw new ConflictException(
+            `No available employee found for service ${service.name} at ${currentTime}`,
+          );
+        }
+
+        assignedEmployeeId = foundEmployee;
+      }
+
+      serviceAssignments.push({
+        service,
+        employeeId: assignedEmployeeId,
+        startTime: currentTime,
+        endTime: serviceEndTime,
+        orderIndex: i,
+      });
+
+      // Next service starts when current one ends
+      currentTime = serviceEndTime;
     }
 
-    // 7. Create appointment
+    // 4. Calculate total end time
+    const totalEndTime = calculateEndTime(startTime, totalDuration);
+
+    // 5. Create appointment
     const newAppointment: NewAppointment = {
       salonId,
-      employeeId,
       appointmentDate,
       startTime,
-      endTime,
+      endTime: totalEndTime,
       totalDuration,
       totalPrice: totalPrice.toFixed(2),
       status: salon.requireBookingApproval ? 'pending' : 'confirmed',
@@ -302,18 +359,88 @@ export class AppointmentsService {
 
     const appointment = await this.appointmentsRepository.create(newAppointment);
 
-    // 8. Create appointment-service relationships
-    const appointmentServiceData: NewAppointmentService[] = services.map((service, index) => ({
+    // 6. Create appointment-service relationships with assigned employees
+    const appointmentServiceData: NewAppointmentService[] = serviceAssignments.map((assignment) => ({
       appointmentId: appointment.id,
-      serviceId: service.id,
-      duration: service.duration,
-      price: service.price,
-      orderIndex: index,
+      serviceId: assignment.service.id,
+      employeeId: assignment.employeeId,
+      duration: assignment.service.duration,
+      price: assignment.service.price,
+      startTime: assignment.startTime,
+      endTime: assignment.endTime,
+      orderIndex: assignment.orderIndex,
     }));
 
     await this.appointmentServicesRepository.createMany(appointmentServiceData);
 
     return appointment;
+  }
+
+  /**
+   * Find an available employee for a service at a specific time
+   */
+  private async findAvailableEmployee(
+    salonId: string,
+    serviceId: string,
+    date: string,
+    startTime: string,
+    endTime: string,
+    dayOfWeek: number,
+  ): Promise<string | null> {
+    // Get all employees from the salon who can perform this service
+    const allEmployees = await this.employeesRepository.findBySalonId(salonId);
+    
+    for (const employee of allEmployees) {
+      // Check if employee can perform the service
+      const canPerform = await this.employeeServicesRepository.exists(employee.id, serviceId);
+      if (!canPerform) continue;
+
+      // Check if employee is available
+      const isAvailable = await this.validateEmployeeAvailability(
+        employee.id,
+        date,
+        startTime,
+        endTime,
+        dayOfWeek,
+      );
+
+      if (isAvailable) {
+        return employee.id;
+      }
+    }
+
+    return null; // No available employee found
+  }
+
+  /**
+   * Validate if an employee is available for a specific time slot
+   */
+  private async validateEmployeeAvailability(
+    employeeId: string,
+    date: string,
+    startTime: string,
+    endTime: string,
+    dayOfWeek: number,
+  ): Promise<boolean> {
+    // Check if employee works on this day
+    const schedule = await this.schedulesRepository.findByEmployeeAndDay(employeeId, dayOfWeek);
+    if (!schedule || !schedule.isAvailable) {
+      return false;
+    }
+
+    // Check if time slot is within employee's working hours
+    const scheduleStart = parseTime(schedule.startTime);
+    const scheduleEnd = parseTime(schedule.endTime);
+    const slotStart = parseTime(startTime);
+    const slotEnd = parseTime(endTime);
+
+    if (slotStart < scheduleStart || slotEnd > scheduleEnd) {
+      return false;
+    }
+
+    // Check for conflicts with existing appointments
+    const conflicts = await this.checkConflicts(employeeId, date, startTime, endTime);
+    return conflicts.length === 0;
   }
 
   /**
@@ -481,45 +608,18 @@ export class AppointmentsService {
 
   /**
    * Update appointment
-   * Note: Updating services is not supported. Cancel and create a new appointment instead.
+   * Note: Updating services or employees is not supported. Cancel and create a new appointment instead.
+   * Only metadata (notes, client info, status) can be updated.
    */
   async update(id: string, updateAppointmentDto: UpdateAppointmentDto): Promise<Appointment> {
     const appointment = await this.findOne(id);
 
-    // If changing time, validate new time
-    if (
-      updateAppointmentDto.appointmentDate ||
-      updateAppointmentDto.startTime
-    ) {
-      const newDate = updateAppointmentDto.appointmentDate || appointment.appointmentDate;
-      const newStartTime = updateAppointmentDto.startTime || appointment.startTime;
-
-      // Use existing total duration
-      const serviceDuration = appointment.totalDuration;
-
-      const salon = await this.salonsRepository.findById(appointment.salonId);
-      await this.validateAppointmentDateTime(
-        salon,
-        appointment.employeeId,
-        newDate,
-        newStartTime,
-        serviceDuration,
+    // Prevent changing date/time through this endpoint
+    // Use dedicated endpoints or cancel and recreate
+    if (updateAppointmentDto.appointmentDate || updateAppointmentDto.startTime) {
+      throw new BadRequestException(
+        'Cannot change appointment date/time. Please cancel and create a new appointment.',
       );
-
-      const newEndTime = calculateEndTime(newStartTime, serviceDuration);
-
-      // Check conflicts (excluding current appointment)
-      const conflicts = await this.checkConflicts(
-        appointment.employeeId,
-        newDate,
-        newStartTime,
-        newEndTime,
-        id,
-      );
-
-      if (conflicts.length > 0) {
-        throw new ConflictException('New time slot conflicts with existing appointment');
-      }
     }
 
     return await this.appointmentsRepository.update(id, updateAppointmentDto);

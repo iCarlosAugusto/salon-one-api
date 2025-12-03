@@ -3,6 +3,7 @@ import { eq, and, inArray, gte, lte } from 'drizzle-orm';
 import { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { DATABASE_CONNECTION } from '../database/database.module';
 import { appointments, Appointment, NewAppointment } from '../database/schemas/appointment.schema';
+import { appointmentServices } from '../database/schemas/appointment-service.schema';
 
 @Injectable()
 export class AppointmentsRepository {
@@ -37,16 +38,21 @@ export class AppointmentsRepository {
     employeeId: string,
     date: string,
   ): Promise<Appointment[]> {
-    return await this.db
-      .select()
+    // Note: Now appointments don't have employeeId directly
+    // Use AppointmentServicesRepository.findByEmployeeAndDate instead
+    const results = await this.db
+      .select({ appointment: appointments })
       .from(appointments)
+      .innerJoin(appointmentServices, eq(appointments.id, appointmentServices.appointmentId))
       .where(
         and(
-          eq(appointments.employeeId, employeeId),
+          eq(appointmentServices.employeeId, employeeId),
           eq(appointments.appointmentDate, date),
         ),
       )
       .orderBy(appointments.startTime);
+    
+    return results.map(r => r.appointment);
   }
 
   async findByEmployeeAndDateWithStatus(
@@ -54,17 +60,22 @@ export class AppointmentsRepository {
     date: string,
     statuses: string[],
   ): Promise<Appointment[]> {
-    return await this.db
-      .select()
+    // Note: Now appointments don't have employeeId directly
+    // Use AppointmentServicesRepository.findByEmployeeAndDateWithStatus instead
+    const results = await this.db
+      .select({ appointment: appointments })
       .from(appointments)
+      .innerJoin(appointmentServices, eq(appointments.id, appointmentServices.appointmentId))
       .where(
         and(
-          eq(appointments.employeeId, employeeId),
+          eq(appointmentServices.employeeId, employeeId),
           eq(appointments.appointmentDate, date),
           inArray(appointments.status, statuses),
         ),
       )
       .orderBy(appointments.startTime);
+    
+    return results.map(r => r.appointment);
   }
 
   async findBySalonAndDate(salonId: string, date: string): Promise<Appointment[]> {
@@ -124,9 +135,10 @@ export class AppointmentsRepository {
     const result = await this.db
       .select()
       .from(appointments)
+      .innerJoin(appointmentServices, eq(appointments.id, appointmentServices.appointmentId))
       .where(
         and(
-          eq(appointments.employeeId, employeeId),
+          eq(appointmentServices.employeeId, employeeId),
           eq(appointments.appointmentDate, date),
           inArray(appointments.status, ['pending', 'confirmed', 'in_progress']),
         ),

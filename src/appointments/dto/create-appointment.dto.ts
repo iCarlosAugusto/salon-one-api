@@ -9,19 +9,20 @@ import {
   MaxLength,
   MinLength,
   Matches,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+import { ServiceBookingDto } from './service-booking.dto';
 
 export class CreateAppointmentDto {
   @IsUUID()
   salonId: string;
 
-  @IsUUID()
-  employeeId: string;
-
   @IsArray()
   @ArrayMinSize(1, { message: 'At least one service is required' })
-  @IsUUID('4', { each: true })
-  serviceIds: string[];
+  @ValidateNested({ each: true })
+  @Type(() => ServiceBookingDto)
+  services: ServiceBookingDto[];
 
   @IsDateString()
   appointmentDate: string; // YYYY-MM-DD

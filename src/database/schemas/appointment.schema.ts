@@ -1,11 +1,9 @@
 import { pgTable, uuid, varchar, text, decimal, integer, date, time, timestamp, boolean } from 'drizzle-orm/pg-core';
 import { salons } from './salon.schema';
-import { employees } from './employee.schema';
 
 export const appointments = pgTable('appointments', {
   id: uuid('id').defaultRandom().primaryKey(),
   salonId: uuid('salon_id').notNull().references(() => salons.id, { onDelete: 'cascade' }),
-  employeeId: uuid('employee_id').notNull().references(() => employees.id, { onDelete: 'cascade' }),
   
   // Appointment date and time
   appointmentDate: date('appointment_date').notNull(),
