@@ -27,7 +27,7 @@ export class AppointmentsController {
   @Get('available-slots')
   getAvailableSlots(@Query() query: AvailableSlotsQueryDto) {
     return this.appointmentsService.getAvailableTimeSlots(
-      query.employeeId,
+      query.employeeIds,
       query.serviceIds,
       query.date,
     );

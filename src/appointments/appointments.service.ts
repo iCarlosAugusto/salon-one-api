@@ -24,6 +24,7 @@ import {
   calculateEndTime,
   canAccommodateService,
 } from '../common/utils/slot.utils';
+import { Service } from 'src/database/schemas';
 
 @Injectable()
 export class AppointmentsService {
@@ -38,26 +39,21 @@ export class AppointmentsService {
   ) {}
 
   /**
-   * Get available time slots for an employee and one or more services on a specific date
-   * @param employeeId - ID of the employee
+   * Get available time slots for one or more employees and services on a specific date
+   * @param employeeIds - Array of employee IDs (can be one or multiple)
    * @param serviceIds - Array of service IDs (can be one or multiple)
    * @param date - Date in format YYYY-MM-DD
-   * @returns Array of available time slots in HH:MM format
+   * @returns Array of objects with employeeId, employeeName, and available slots
    */
   async getAvailableTimeSlots(
-    employeeId: string,
+    employeeIds: string[],
     serviceIds: string[],
     date: string,
-  ): Promise<string[]> {
-    // 1. Validate employee exists
-    const employee = await this.employeesRepository.findById(employeeId);
-    if (!employee) {
-      throw new NotFoundException(`Employee with ID ${employeeId} not found`);
-    }
-
-    // 2. Validate all services exist and calculate total duration
+  ): Promise<Array<{ employeeId: string; employeeName: string; availableSlots: string[] }>> {
+    // 1. Validate all services exist and calculate total duration
     let totalDuration = 0;
-    const services: any[] = [];
+    const services: Service[] = [];
+    let salonId: string | null = null;
 
     for (const serviceId of serviceIds) {
       const service = await this.servicesRepository.findById(serviceId);
@@ -65,19 +61,11 @@ export class AppointmentsService {
         throw new NotFoundException(`Service with ID ${serviceId} not found`);
       }
 
-      // Validate service belongs to the same salon
-      if (service.salonId !== employee.salonId) {
-        throw new BadRequestException(
-          `Service ${serviceId} does not belong to employee's salon`,
-        );
-      }
-
-      // Validate employee can perform this service
-      const canPerform = await this.employeeServicesRepository.exists(employeeId, serviceId);
-      if (!canPerform) {
-        throw new BadRequestException(
-          `Employee cannot perform service: ${service.name}`,
-        );
+      // Ensure all services belong to the same salon
+      if (salonId === null) {
+        salonId = service.salonId;
+      } else if (service.salonId !== salonId) {
+        throw new BadRequestException('All services must belong to the same salon');
       }
 
       services.push(service);
@@ -88,51 +76,99 @@ export class AppointmentsService {
       throw new BadRequestException('Total service duration cannot be 0');
     }
 
-    // 3. Get salon configuration
-    const salon = await this.salonsRepository.findById(employee.salonId);
+    if (!salonId) {
+      throw new BadRequestException('No valid salon found for services');
+    }
+
+    // 2. Get salon configuration
+    const salon = await this.salonsRepository.findById(salonId);
     if (!salon) {
-      throw new NotFoundException(`Salon with ID ${employee.salonId} not found`);
+      throw new NotFoundException(`Salon with ID ${salonId} not found`);
     }
 
     const slotInterval = salon.defaultSlotInterval || 10;
-
-    // 4. Get employee schedule for this day
     const dateObj = new Date(date);
     const dayOfWeek = dateObj.getDay();
 
-    const schedule = await this.schedulesRepository.findByEmployeeAndDay(employeeId, dayOfWeek);
+    // 3. Process each employee
+    const results: Array<{ employeeId: string; employeeName: string; availableSlots: string[] }> = [];
 
-    if (!schedule || !schedule.isAvailable) {
-      return []; // Employee doesn't work this day
+    for (const employeeId of employeeIds) {
+      // Validate employee exists
+      const employee = await this.employeesRepository.findById(employeeId);
+      if (!employee) {
+        // Skip invalid employee instead of throwing
+        continue;
+      }
+
+      // Validate employee belongs to the same salon as services
+      if (employee.salonId !== salonId) {
+        // Skip employee from different salon
+        continue;
+      }
+
+      // Check if employee can perform all services
+      let canPerformAll = true;
+      for (const serviceId of serviceIds) {
+        const canPerform = await this.employeeServicesRepository.exists(employeeId, serviceId);
+        if (!canPerform) {
+          // If employee can't perform a service, remove its duration from the total duration
+          const service = services.find(service => service.id === serviceId);
+          totalDuration -= service?.duration || 0;
+          canPerformAll = false;
+          break;
+        }
+      }
+
+      const employeeName = `${employee.firstName} ${employee.lastName}`;
+
+      // Get employee schedule for this day
+      const schedule = await this.schedulesRepository.findByEmployeeAndDay(employeeId, dayOfWeek);
+
+      if (!schedule || !schedule.isAvailable) {
+        // Employee doesn't work this day - add with empty slots
+        results.push({
+          employeeId: employee.id,
+          employeeName,
+          availableSlots: [],
+        });
+        continue;
+      }
+
+      // Generate all possible time slots
+      const allSlots = generateTimeSlots(schedule.startTime, schedule.endTime, slotInterval);
+
+      // Get existing appointments for this employee on this date
+      const activeAppointments = await this.appointmentsRepository.findByEmployeeAndDateWithStatus(
+        employeeId,
+        date,
+        ['pending', 'confirmed', 'in_progress'],
+      );
+
+      // Calculate occupied slots
+      const occupiedSlots = getOccupiedSlots(activeAppointments, slotInterval);
+
+      // Filter available slots (considering total duration of all services)
+      const availableSlots = getAvailableSlots(
+        allSlots,
+        occupiedSlots,
+        totalDuration,
+        slotInterval,
+      );
+
+      // Filter slots that don't extend beyond schedule end time
+      const validSlots = availableSlots.filter((slot) =>
+        canAccommodateService(slot, totalDuration, schedule.endTime),
+      );
+
+      results.push({
+        employeeId: employee.id,
+        employeeName,
+        availableSlots: validSlots,
+      });
     }
 
-    // 5. Generate all possible time slots
-    const allSlots = generateTimeSlots(schedule.startTime, schedule.endTime, slotInterval);
-
-    // 6. Get existing appointments for this employee on this date
-    const activeAppointments = await this.appointmentsRepository.findByEmployeeAndDateWithStatus(
-      employeeId,
-      date,
-      ['pending', 'confirmed', 'in_progress'],
-    );
-
-    // 7. Calculate occupied slots
-    const occupiedSlots = getOccupiedSlots(activeAppointments, slotInterval);
-
-    // 8. Filter available slots (considering total duration of all services)
-    const availableSlots = getAvailableSlots(
-      allSlots,
-      occupiedSlots,
-      totalDuration,
-      slotInterval,
-    );
-
-    // 9. Filter slots that don't extend beyond schedule end time
-    const validSlots = availableSlots.filter((slot) =>
-      canAccommodateService(slot, totalDuration, schedule.endTime),
-    );
-
-    return validSlots;
+    return results;
   }
 
   /**
@@ -145,13 +181,20 @@ export class AppointmentsService {
     startTime: string,
   ): Promise<{ available: boolean; reason?: string }> {
     try {
-      const availableSlots = await this.getAvailableTimeSlots(
-        employeeId,
+      const results = await this.getAvailableTimeSlots(
+        [employeeId], // Convert single employee to array
         [serviceId], // Convert single service to array
         appointmentDate,
       );
 
-      const available = availableSlots.includes(startTime);
+      if (results.length === 0) {
+        return {
+          available: false,
+          reason: 'Employee not available or cannot perform this service',
+        };
+      }
+
+      const available = results[0].availableSlots.includes(startTime);
 
       return {
         available,
