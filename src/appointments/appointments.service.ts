@@ -138,15 +138,24 @@ export class AppointmentsService {
       // Generate all possible time slots
       const allSlots = generateTimeSlots(schedule.startTime, schedule.endTime, slotInterval);
 
-      // Get existing appointments for this employee on this date
-      const activeAppointments = await this.appointmentsRepository.findByEmployeeAndDateWithStatus(
+      // Get existing appointment services for this employee on this date
+      // Now we need to check appointment_services table since each service has its own employee
+      const activeAppointmentServices = await this.appointmentServicesRepository.findByEmployeeAndDateWithStatus(
         employeeId,
         date,
         ['pending', 'confirmed', 'in_progress'],
       );
 
-      // Calculate occupied slots
-      const occupiedSlots = getOccupiedSlots(activeAppointments, slotInterval);
+      // Extract time ranges occupied by this employee
+      const occupiedRanges: Array<{ startTime: string; endTime: string }> = activeAppointmentServices.map(
+        (item: any) => ({
+          startTime: item.appointmentService.startTime,
+          endTime: item.appointmentService.endTime,
+        }),
+      );
+
+      // Calculate occupied slots based on appointment services
+      const occupiedSlots = this.calculateOccupiedSlotsFromRanges(occupiedRanges, slotInterval);
 
       // Filter available slots (considering total duration of all services)
       const availableSlots = getAvailableSlots(
@@ -377,6 +386,31 @@ export class AppointmentsService {
   }
 
   /**
+   * Calculate occupied slots from time ranges
+   */
+  private calculateOccupiedSlotsFromRanges(
+    ranges: Array<{ startTime: string; endTime: string }>,
+    slotInterval: number,
+  ): Set<string> {
+    const occupied = new Set<string>();
+
+    for (const range of ranges) {
+      const startMinutes = parseTime(range.startTime);
+      const endMinutes = parseTime(range.endTime);
+
+      // Mark all slots that overlap with this range
+      for (let minutes = startMinutes; minutes < endMinutes; minutes += slotInterval) {
+        const hours = Math.floor(minutes / 60);
+        const mins = minutes % 60;
+        const timeStr = `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+        occupied.add(timeStr);
+      }
+    }
+
+    return occupied;
+  }
+
+  /**
    * Find an available employee for a service at a specific time
    */
   private async findAvailableEmployee(
@@ -438,9 +472,25 @@ export class AppointmentsService {
       return false;
     }
 
-    // Check for conflicts with existing appointments
-    const conflicts = await this.checkConflicts(employeeId, date, startTime, endTime);
-    return conflicts.length === 0;
+    // Check for conflicts with existing appointment services for this employee
+    const activeAppointmentServices = await this.appointmentServicesRepository.findByEmployeeAndDateWithStatus(
+      employeeId,
+      date,
+      ['pending', 'confirmed', 'in_progress'],
+    );
+
+    // Check if the requested time slot overlaps with any existing service
+    for (const item of activeAppointmentServices) {
+      const existingStart = parseTime(item.appointmentService.startTime);
+      const existingEnd = parseTime(item.appointmentService.endTime);
+
+      // Check for overlap: (start1 < end2 && end1 > start2)
+      if (slotStart < existingEnd && slotEnd > existingStart) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   /**
