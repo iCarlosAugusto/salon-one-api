@@ -39,14 +39,19 @@ export class AppointmentsService {
   ) {}
 
   /**
-   * Get available time slots for one or more employees and services on a specific date
-   * @param employeeIds - Array of employee IDs (can be one or multiple)
-   * @param serviceIds - Array of service IDs (can be one or multiple)
+   * Get available time slots for services on a specific date
+   * 
+   * Two scenarios:
+   * 1. With specific employeeIds: returns availability only for those employees
+   * 2. Without employeeIds: returns availability for ALL employees who can perform the services
+   * 
+   * @param employeeIds - Optional array of employee IDs
+   * @param serviceIds - Array of service IDs (required)
    * @param date - Date in format YYYY-MM-DD
    * @returns Array of objects with employeeId, employeeName, and available slots
    */
   async getAvailableTimeSlots(
-    employeeIds: string[],
+    employeeIds: string[] | undefined,
     serviceIds: string[],
     date: string,
   ): Promise<Array<{ employeeId: string; employeeName: string; availableSlots: string[] }>> {
@@ -90,94 +95,162 @@ export class AppointmentsService {
     const dateObj = new Date(date);
     const dayOfWeek = dateObj.getDay();
 
-    // 3. Process each employee
+    // 3. Determine which employees to check
+    let targetEmployeeIds: string[];
+
+    if (employeeIds && employeeIds.length > 0) {
+      // Scenario 1: Specific employees provided
+      targetEmployeeIds = employeeIds;
+    } else {
+      // Scenario 2: No employees specified - find ALL employees who can perform the services
+      targetEmployeeIds = await this.findEmployeesForServices(salonId, serviceIds);
+      
+      if (targetEmployeeIds.length === 0) {
+        return []; // No employees can perform these services
+      }
+    }
+
+    // 4. Process each employee and calculate available slots
     const results: Array<{ employeeId: string; employeeName: string; availableSlots: string[] }> = [];
 
-    for (const employeeId of employeeIds) {
-      // Validate employee exists
-      const employee = await this.employeesRepository.findById(employeeId);
-      if (!employee) {
-        // Skip invalid employee instead of throwing
-        continue;
-      }
+    for (const employeeId of targetEmployeeIds) {
+      const employeeSlots = await this.calculateEmployeeAvailableSlots(
+        employeeId,
+        salonId,
+        serviceIds,
+        services,
+        totalDuration,
+        date,
+        dayOfWeek,
+        slotInterval,
+      );
 
-      // Validate employee belongs to the same salon as services
-      if (employee.salonId !== salonId) {
-        // Skip employee from different salon
-        continue;
+      if (employeeSlots) {
+        results.push(employeeSlots);
       }
+    }
 
-      // Check if employee can perform all services
+    return results;
+  }
+
+  /**
+   * Find all employees from a salon who can perform ALL the requested services
+   */
+  private async findEmployeesForServices(
+    salonId: string,
+    serviceIds: string[],
+  ): Promise<string[]> {
+    // Get all active employees from this salon
+    const allEmployees = await this.employeesRepository.findBySalonId(salonId);
+    const qualifiedEmployeeIds: string[] = [];
+
+    for (const employee of allEmployees) {
+      if (!employee.isActive) continue;
+
+      // Check if this employee can perform ALL requested services
       let canPerformAll = true;
       for (const serviceId of serviceIds) {
-        const canPerform = await this.employeeServicesRepository.exists(employeeId, serviceId);
+        const canPerform = await this.employeeServicesRepository.exists(employee.id, serviceId);
         if (!canPerform) {
-          // If employee can't perform a service, remove its duration from the total duration
-          const service = services.find(service => service.id === serviceId);
-          totalDuration -= service?.duration || 0;
           canPerformAll = false;
           break;
         }
       }
 
-      const employeeName = `${employee.firstName} ${employee.lastName}`;
-
-      // Get employee schedule for this day
-      const schedule = await this.schedulesRepository.findByEmployeeAndDay(employeeId, dayOfWeek);
-
-      if (!schedule || !schedule.isAvailable) {
-        // Employee doesn't work this day - add with empty slots
-        results.push({
-          employeeId: employee.id,
-          employeeName,
-          availableSlots: [],
-        });
-        continue;
+      if (canPerformAll) {
+        qualifiedEmployeeIds.push(employee.id);
       }
-
-      // Generate all possible time slots
-      const allSlots = generateTimeSlots(schedule.startTime, schedule.endTime, slotInterval);
-
-      // Get existing appointment services for this employee on this date
-      // Now we need to check appointment_services table since each service has its own employee
-      const activeAppointmentServices = await this.appointmentServicesRepository.findByEmployeeAndDateWithStatus(
-        employeeId,
-        date,
-        ['pending', 'confirmed', 'in_progress'],
-      );
-
-      // Extract time ranges occupied by this employee
-      const occupiedRanges: Array<{ startTime: string; endTime: string }> = activeAppointmentServices.map(
-        (item: any) => ({
-          startTime: item.appointmentService.startTime,
-          endTime: item.appointmentService.endTime,
-        }),
-      );
-
-      // Calculate occupied slots based on appointment services
-      const occupiedSlots = this.calculateOccupiedSlotsFromRanges(occupiedRanges, slotInterval);
-
-      // Filter available slots (considering total duration of all services)
-      const availableSlots = getAvailableSlots(
-        allSlots,
-        occupiedSlots,
-        totalDuration,
-        slotInterval,
-      );
-
-      // Filter slots that don't extend beyond schedule end time
-      const validSlots = availableSlots.filter((slot) =>
-        canAccommodateService(slot, totalDuration, schedule.endTime),
-      );
-
-      results.push({
-        employeeId: employee.id,
-        employeeName,
-        availableSlots: validSlots,
-      });
     }
 
-    return results;
+    return qualifiedEmployeeIds;
+  }
+
+  /**
+   * Calculate available slots for a single employee
+   */
+  private async calculateEmployeeAvailableSlots(
+    employeeId: string,
+    salonId: string,
+    serviceIds: string[],
+    services: Service[],
+    totalDuration: number,
+    date: string,
+    dayOfWeek: number,
+    slotInterval: number,
+  ): Promise<{ employeeId: string; employeeName: string; availableSlots: string[] } | null> {
+    // Validate employee exists
+    const employee = await this.employeesRepository.findById(employeeId);
+    if (!employee) {
+      return null;
+    }
+
+    // Validate employee belongs to the same salon as services
+    if (employee.salonId !== salonId) {
+      return null;
+    }
+
+    // Check if employee can perform all services
+    for (const serviceId of serviceIds) {
+      const canPerform = await this.employeeServicesRepository.exists(employeeId, serviceId);
+      if (!canPerform) {
+        // Employee can't perform this service - skip
+        return null;
+      }
+    }
+
+    const employeeName = `${employee.firstName} ${employee.lastName}`;
+
+    // Get employee schedule for this day
+    const schedule = await this.schedulesRepository.findByEmployeeAndDay(employeeId, dayOfWeek);
+
+    if (!schedule || !schedule.isAvailable) {
+      // Employee doesn't work this day - return with empty slots
+      return {
+        employeeId: employee.id,
+        employeeName,
+        availableSlots: [],
+      };
+    }
+
+    // Generate all possible time slots based on schedule
+    const allSlots = generateTimeSlots(schedule.startTime, schedule.endTime, slotInterval);
+
+    // Get existing appointment services for this employee on this date
+    const activeAppointmentServices = await this.appointmentServicesRepository.findByEmployeeAndDateWithStatus(
+      employeeId,
+      date,
+      ['pending', 'confirmed', 'in_progress'],
+    );
+
+    // Extract time ranges occupied by this employee
+    const occupiedRanges: Array<{ startTime: string; endTime: string }> = activeAppointmentServices.map(
+      (item: any) => ({
+        startTime: item.appointmentService.startTime,
+        endTime: item.appointmentService.endTime,
+      }),
+    );
+
+    // Calculate occupied slots based on appointment services
+    const occupiedSlots = this.calculateOccupiedSlotsFromRanges(occupiedRanges, slotInterval);
+
+    // Filter available slots (considering total duration of all services)
+    const availableSlots = getAvailableSlots(
+      allSlots,
+      occupiedSlots,
+      totalDuration,
+      slotInterval,
+    );
+
+    // Filter slots that don't extend beyond schedule end time
+    const validSlots = availableSlots.filter((slot) =>
+      canAccommodateService(slot, totalDuration, schedule.endTime),
+    );
+
+    return {
+      employeeId: employee.id,
+      employeeName,
+      availableSlots: validSlots,
+    };
   }
 
   /**
